@@ -1,0 +1,200 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>Ongoing Matches</title>
+  <style>
+    body {
+      margin: 0;
+      font-family: Arial, sans-serif;
+      background: #112138;
+      color: white;
+      display: flex;
+      flex-direction: column;
+      height: 100vh;
+    }
+    .game-title {
+      text-align: center;
+      font-size: 2em;
+      font-weight: bold;
+      padding: 10px 0;
+      border-bottom: 2px solid #fff;
+    }
+    .board {
+      display: flex;
+      flex-direction: column;
+      flex: 1;
+      overflow: hidden;
+    }
+    .match {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 10px 20px;
+    font-size: 1.6em;
+    min-height: 60px;
+    transition: background-color 0.5s; /* smooth color change */
+    }
+    .match:nth-child(odd) {
+      background-color: #3ebcec; /* light blue */
+    }
+    .match:nth-child(even) {
+      background-color: #059CD5; /* dark blue */
+    }
+    .players {
+      display: flex;
+      flex-direction: column;
+      font-weight: bold;
+      flex: 1;
+    }
+    .players span {
+      margin: 3px 0; /* smaller margin for more rows */
+    }
+    .right {
+      display: flex;
+      align-items: center;
+      gap: 20px; /* space between station and timer */
+      flex-shrink: 0;
+    }
+    .station {
+      background: white;
+      color: #059CD5;
+      font-size: 1.4em;
+      font-weight: bold;
+      padding: 8px 16px;
+      border-radius: 8px;
+      box-shadow: 2px 2px 5px rgba(0,0,0,0.3);
+      text-transform: uppercase;
+    }
+    .timer {
+      font-family: monospace;
+      font-size: 1.8em;
+      font-weight: bold;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      /* color will be set dynamically */
+    }
+    .timer::before {
+      content: "⏱";
+      font-size: 1.3em;
+      /* pseudo-element inherits the .timer color */
+    }
+    .ads-space {
+      height: 80px; /* reserved space for ads */
+      background: #112138;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 1.5em;
+      color: #fff;
+      border-top: 2px solid #fff;
+    }
+  </style>
+</head>
+<body>
+  <div class="game-title" id="game-title">Game Name</div>
+  <div class="board" id="board"></div>
+  <div class="ads-space">Ads / Sponsor Space</div>
+
+<script>
+function formatTime(seconds) {
+  const mins = Math.floor(seconds / 60);
+  const secs = seconds % 60;
+  return `${String(mins).padStart(2,"0")}:${String(secs).padStart(2,"0")}`;
+}
+
+let scrollAnimation;
+
+async function loadMatches() {
+  const res = await fetch(`/api/ongoing/{{ page }}`);
+  const data = await res.json();
+  const board = document.getElementById("board");
+  board.innerHTML = "";
+
+  if (data.error || data.length === 0) {
+    board.innerHTML = "<div class='match'>No ongoing matches</div>";
+    return;
+  }
+
+  // Set game title dynamically
+  const gameTitle = data[0]?.game || "Ongoing Matches";
+  document.getElementById("game-title").textContent = gameTitle;
+
+  data.forEach(set => {
+    const div = document.createElement("div");
+    div.className = "match";
+    div.innerHTML = `
+      <div class="players">
+        <span>${set.players[0] || ""}</span>
+        <span>${set.players[1] || ""}</span>
+      </div>
+      <div class="right">
+        <div class="station">${set.station || ""}</div>
+        <div class="timer" data-start="${set.elapsed}"></div>
+      </div>
+    `;
+    board.appendChild(div);
+  });
+
+  // Duplicate content for infinite scroll
+  board.innerHTML += board.innerHTML;
+
+  startTimers();
+  startInfiniteScroll();
+}
+
+function startTimers() {
+  // We'll still set an interval per timer like your current logic
+  document.querySelectorAll(".timer").forEach(el => {
+    let elapsed = parseInt(el.getAttribute("data-start"));
+
+    function tick() {
+      el.textContent = formatTime(elapsed);
+
+      // color logic (elapsed is in seconds)
+      if (elapsed >= 15 * 60) {
+        el.style.color = "#000000"; // black for > 15min
+      } else if (elapsed >= 10 * 60) {
+        el.style.color = "#F44336"; // red for >=10min
+      } else if (elapsed >= 5 * 60) {
+        el.style.color = "#FFEB3B"; // yellow for >=5min
+      } else {
+        el.style.color = "#FFFFFF"; // normal (white) for <5min
+      }
+
+      elapsed++;
+    }
+
+    tick();
+    setInterval(tick, 1000);
+  });
+}
+
+function startInfiniteScroll() {
+  const board = document.getElementById("board");
+  if (scrollAnimation) cancelAnimationFrame(scrollAnimation);
+
+  const totalHeight = board.scrollHeight / 2; // original content height
+  let scrollPos = 0;
+  const speed = 0.25; // pixels per frame, adjust to scroll faster/slower
+
+  function step() {
+    scrollPos += speed;
+    if (scrollPos >= totalHeight) {
+      scrollPos = 0; // reset to top seamlessly
+    }
+    board.scrollTop = scrollPos;
+    scrollAnimation = requestAnimationFrame(step);
+  }
+
+  step();
+}
+
+// Initial load and refresh
+loadMatches();
+setInterval(loadMatches, 15000); // refresh matches every 15s
+</script>
+
+</body>
+</html>
