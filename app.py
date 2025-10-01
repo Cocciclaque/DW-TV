@@ -1,11 +1,13 @@
 import os, json, time, requests
 from flask import Flask, jsonify, render_template
-
+from dotenv import load_dotenv
 API_URL = "https://api.start.gg/gql/alpha"
-API_KEY = os.getenv("START_GG_KEY") or "27e07da4ef74268bb5e236cc182c740a"
+API_KEY = os.getenv("START_GG_KEY")
+
+load_dotenv()
 
 CONFIG_PATH = os.path.join(os.getcwd(), "config.json")
-print(CONFIG_PATH)
+print("CONFIG PATH IS : " + CONFIG_PATH)
 app = Flask(__name__, template_folder="templates")
 
 # Simple loader: always re-read the file
