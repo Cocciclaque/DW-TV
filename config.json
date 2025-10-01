@@ -1,6 +1,16 @@
 {
+  "scrollSpeed": 0.66,
+  "refreshIntervalMs": 15000,
   "event_slugs": {
-    "1": "tournament/tournament-template-3/event/tekken-singles",
-    "2": "tournament/tournament-template-3/event/strive-singles"
+    "tekken": "tournament/tournament-template-3/event/tekken-singles",
+    "strive": "tournament/tournament-template-3/event/strive-singles"
+  },
+  "rotation": {
+    "enabled": true,
+    "intervalSeconds": 15,
+    "order": [
+      "tekken",
+      "strive"
+    ]
   }
 }

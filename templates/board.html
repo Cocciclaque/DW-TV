@@ -90,6 +90,45 @@
       color: #fff;
       border-top: 2px solid #fff;
     }
+    /* Make sure matches can host an absolutely-positioned overlay */
+.match {
+  position: relative;
+  overflow: hidden;
+}
+.jqq {
+  height:150px;
+}
+/* Overlay container */
+.match .threshold-overlay {
+  position: absolute;
+  inset: 0;                  /* cover whole match */
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  pointer-events: none;      /* let clicks pass through */
+  opacity: 0;
+  transition: opacity 300ms ease;
+  z-index: 10;
+  background: rgba(255,255,255,0); /* transparent backdrop (optional) */
+}
+
+/* The svg/icon inside the overlay */
+.match .threshold-overlay svg {
+  width: 56px;
+  height: 56px;
+  filter: drop-shadow(0 2px 6px rgba(0,0,0,0.45));
+  transform: scale(0.9);
+  transition: transform 300ms ease;
+}
+
+/* When showing we ramp up opacity and scale */
+.match .threshold-overlay.show {
+  opacity: 1;
+}
+.match .threshold-overlay.show svg {
+  transform: scale(1);
+}
+
   </style>
 </head>
 <body>
@@ -98,102 +137,371 @@
   <div class="ads-space">Ads / Sponsor Space</div>
 
 <script>
+/* Drop-in rotation + scrolling + timers script
+   - fetches /config or /config.json
+   - rotates pages according to config.rotation.order (or event_slugs keys)
+   - scrolls and updates timers as before
+*/
+
 function formatTime(seconds) {
   const mins = Math.floor(seconds / 60);
   const secs = seconds % 60;
   return `${String(mins).padStart(2,"0")}:${String(secs).padStart(2,"0")}`;
 }
 
-let scrollAnimation;
+// runtime state
+let config = null;
+let currentPage = "{{ page }}"; // server-rendered initial page
+let rotationTimerId = null;
+let rotationOrder = [];
+let rotationIndex = -1; // will be set to index of currentPage
+let timerIntervals = [];
+let scrollAnimation = null;
+let scrollPos = 0;
+let scrollSpeed = 0.25; // default, overwritten by config
 
-async function loadMatches() {
-  const res = await fetch(`/api/ongoing/{{ page }}`);
-  const data = await res.json();
-  const board = document.getElementById("board");
-  board.innerHTML = "";
+// Utility: try fetching config from two common paths
+async function fetchConfig() {
+  const tries = ["/config", "/config.json"];
+  for (const url of tries) {
+    try {
+      const r = await fetch(url, { cache: "no-store" });
+      if (!r.ok) continue;
+      const j = await r.json();
+      console.log("Loaded config from", url, j);
+      return j;
+    } catch (e) {
+      // continue to next try
+    }
+  }
+  console.warn("No config found at /config or /config.json; using defaults");
+  return null;
+}
 
-  if (data.error || data.length === 0) {
-    board.innerHTML = "<div class='match'>No ongoing matches</div>";
+async function loadConfigAndSetup() {
+  const newConfig = await fetchConfig();
+  if (!newConfig) {
+    config = null;
+    stopRotation();
     return;
   }
 
-  // Set game title dynamically
-  const gameTitle = data[0]?.game || "Ongoing Matches";
-  document.getElementById("game-title").textContent = gameTitle;
+  // If config changed (stringified), reapply
+  const prev = JSON.stringify(config);
+  config = newConfig;
+  const now = JSON.stringify(config);
+  if (prev !== now) {
+    applyConfig();
+  }
+}
 
-  data.forEach(set => {
-    const div = document.createElement("div");
-    div.className = "match";
-    div.innerHTML = `
-      <div class="players">
-        <span>${set.players[0] || ""}</span>
-        <span>${set.players[1] || ""}</span>
-      </div>
-      <div class="right">
-        <div class="station">${set.station || ""}</div>
-        <div class="timer" data-start="${set.elapsed}"></div>
-      </div>
-    `;
-    board.appendChild(div);
-  });
+function applyConfig() {
+  // scrollSpeed
+  if (config && config.scrollSpeed !== undefined) {
+    const v = Number(config.scrollSpeed);
+    if (Number.isFinite(v) && v > 0) scrollSpeed = v;
+  }
 
-  // Duplicate content for infinite scroll
-  board.innerHTML += board.innerHTML;
+  // Build rotationOrder: prefer config.rotation.order, else keys of event_slugs
+  if (config && config.rotation && config.rotation.enabled) {
+    if (Array.isArray(config.rotation.order) && config.rotation.order.length) {
+      rotationOrder = config.rotation.order.map(String);
+    } else if (config.event_slugs && typeof config.event_slugs === "object") {
+      rotationOrder = Object.keys(config.event_slugs).map(String);
+    } else {
+      rotationOrder = [String(currentPage)];
+    }
 
-  startTimers();
-  startInfiniteScroll();
+    // ensure currentPage is present: find its index; if missing, set index to -1 so next tick goes to 0
+    rotationIndex = rotationOrder.indexOf(String(currentPage));
+    if (rotationIndex === -1) {
+      // don't forcibly change currentPage now, but prepare rotation to go to first item on first tick
+      rotationIndex = 0;
+      // if you want immediate switch to rotation order first item uncomment:
+      // currentPage = rotationOrder[0];
+    }
+
+    startRotationTimer();
+  } else {
+    // rotation disabled
+    rotationOrder = [];
+    rotationIndex = -1;
+    stopRotation();
+  }
+}
+
+function startRotationTimer() {
+  stopRotation(); // clear previous if any
+  if (!config || !config.rotation || !config.rotation.enabled || rotationOrder.length === 0) return;
+
+  const intervalSeconds = Number(config.rotation.intervalSeconds) || 20;
+  const intervalMs = Math.max(1000, intervalSeconds * 1000);
+  console.log("Starting rotation every", intervalSeconds, "s over", rotationOrder);
+
+  // Start the interval - advance to next index on each tick
+  rotationTimerId = setInterval(() => {
+    // advance index (wrap)
+    rotationIndex = (rotationIndex + 1) % rotationOrder.length;
+    const nextPage = rotationOrder[rotationIndex];
+    console.log("Rotation tick -> loading page", nextPage);
+    rotateToPage(nextPage).catch(console.error);
+  }, intervalMs);
+}
+
+function stopRotation() {
+  if (rotationTimerId) {
+    clearInterval(rotationTimerId);
+    rotationTimerId = null;
+    console.log("Rotation stopped");
+  }
+}
+
+// rotate with fade: fade board out, loadMatches(nextPage), then fade in
+async function rotateToPage(nextPage) {
+  const board = document.getElementById("board");
+  if (!board) return;
+
+  // if page is already current, still advance (but this shouldn't happen often)
+  if (String(nextPage) === String(currentPage)) {
+    // still reload content for that page (useful if data changed)
+    await fadeSwapLoad(nextPage);
+    return;
+  }
+
+  await fadeSwapLoad(nextPage);
+}
+
+async function fadeSwapLoad(pageToLoad) {
+  const board = document.getElementById("board");
+  // ensure transition exists
+  board.style.transition = "opacity 0.8s ease";
+  board.style.opacity = 0; // fade out
+  await new Promise(res => setTimeout(res, 850));
+
+  // set currentPage and load
+  currentPage = String(pageToLoad);
+  await loadMatches(currentPage);
+
+  // reset scroll position so new dataset loops nicely
+  board.scrollTop = 0;
+  scrollPos = 0;
+
+  board.style.opacity = 1; // fade in
+}
+
+// loadMatches accepts a page parameter
+async function loadMatches(page = currentPage) {
+  const board = document.getElementById("board");
+  if (!board) {
+    console.error("No #board element found");
+    return;
+  }
+
+  // fetch
+  try {
+    const res = await fetch(`/api/ongoing/${page}`);
+    const data = await res.json();
+
+    // clear and stop timers from previous dataset
+    board.innerHTML = "";
+    clearAllTimerIntervals();
+
+    if (data.error || data.length === 0) {
+      board.innerHTML = "<div class='match'>No ongoing matches</div>";
+      return;
+    }
+
+    // Set game title
+    const gameTitle = data[0]?.game || "Ongoing Matches";
+    document.getElementById("game-title").textContent = gameTitle;
+
+    data.forEach(set => {
+      const div = document.createElement("div");
+      div.className = "match";
+      div.innerHTML = `
+        <div class="players">
+          <span>${set.players[0] || ""}</span>
+          <span>${set.players[1] || ""}</span>
+        </div>
+        <div class="right">
+          <div class="station">${set.station || ""}</div>
+          <div class="timer" data-start="${set.elapsed}"></div>
+        </div>
+      `;
+      board.appendChild(div);
+    });
+
+    // Duplicate content for infinite scroll (keeps loop smooth)
+    board.innerHTML += board.innerHTML;
+
+    // restart timers + scroll loop
+    startTimers();
+    startInfiniteScroll();
+  } catch (err) {
+    console.error("Failed to load matches for page", page, err);
+  }
+}
+
+function clearAllTimerIntervals() {
+  timerIntervals.forEach(id => clearInterval(id));
+  timerIntervals = [];
 }
 
 function startTimers() {
-  // We'll still set an interval per timer like your current logic
+  // Clear existing intervals first
+  clearAllTimerIntervals();
+
+  // helper: compute threshold index
+  // 0: <5min, 1: >=5, 2: >=10, 3: >=15
+  function thresholdForSeconds(seconds) {
+    if (seconds >= 15 * 60) return 3;
+    if (seconds >= 10 * 60) return 2;
+    if (seconds >= 5 * 60) return 1;
+    return 0;
+  }
+
+  // helper: create and show overlay for a match element
+  // threshold is integer 1..3 (we won't show for 0)
+  function showThresholdOverlay(matchEl, threshold) {
+    if (!matchEl) return;
+    // Only one overlay at a time per match — reuse if present
+    let overlay = matchEl.querySelector('.threshold-overlay');
+    if (!overlay) {
+      overlay = document.createElement('div');
+      overlay.className = 'threshold-overlay';
+      matchEl.appendChild(overlay);
+    }
+
+    // choose icon SVG by threshold
+    let svgHtml = '';
+    if (threshold === 1) {
+      // yellow clock / warning
+      svgHtml = `
+        <img class="jqq" src="{{ url_for('static', filename='jqq_qui_rale.webp') }}" alt="overlay">`;
+    } else if (threshold === 2) {
+      // red flame
+      svgHtml = `
+        <img class="jqq" src="{{ url_for('static', filename='jqq_qui_rale.webp') }}" alt="overlay">
+        <img class="jqq" src="{{ url_for('static', filename='jqq_qui_rale.webp') }}" alt="overlay">
+        `;
+    } else if (threshold === 3) {
+      // black stop / alert
+      svgHtml = `
+        <img class="jqq" src="{{ url_for('static', filename='jqq_qui_rale.webp') }}" alt="overlay">
+        <img class="jqq" src="{{ url_for('static', filename='jqq_qui_rale.webp') }}" alt="overlay">
+        <img class="jqq" src="{{ url_for('static', filename='jqq_qui_rale.webp') }}" alt="overlay">`;
+    }
+
+    // set inner HTML and animate
+    overlay.innerHTML = svgHtml;
+
+    // Force reflow then add .show so transition fires reliably
+    // (use requestAnimationFrame to ensure DOM updated)
+    overlay.classList.remove('show');
+    requestAnimationFrame(() => {
+      overlay.classList.add('show');
+    });
+
+    // remove after duration (2.5s): fade out then clear innerHTML
+    const duration = 2500;
+    setTimeout(() => {
+      overlay.classList.remove('show');
+      // cleanup after transition (300ms)
+      setTimeout(() => {
+        // only remove inner content, keep overlay node for reuse
+        overlay.innerHTML = '';
+      }, 350);
+    }, duration);
+  }
+
+  // iterate timers
   document.querySelectorAll(".timer").forEach(el => {
-    let elapsed = parseInt(el.getAttribute("data-start"));
+    // initialize previous threshold (store on the element)
+    let elapsed = parseInt(el.getAttribute("data-start")) || 0;
+    let prevThreshold = thresholdForSeconds(elapsed);
+    el.dataset._threshold = String(prevThreshold);
 
     function tick() {
       el.textContent = formatTime(elapsed);
 
-      // color logic (elapsed is in seconds)
-      if (elapsed >= 15 * 60) {
-        el.style.color = "#000000"; // black for > 15min
-      } else if (elapsed >= 10 * 60) {
-        el.style.color = "#F44336"; // red for >=10min
-      } else if (elapsed >= 5 * 60) {
-        el.style.color = "#FFEB3B"; // yellow for >=5min
-      } else {
-        el.style.color = "#FFFFFF"; // normal (white) for <5min
+      // determine current threshold
+      const curThreshold = thresholdForSeconds(elapsed);
+
+      // color logic
+      if (curThreshold >= 3) el.style.color = "#000000";
+      else if (curThreshold >= 2) el.style.color = "#F44336";
+      else if (curThreshold >= 1) el.style.color = "#FFEB3B";
+      else el.style.color = "#FFFFFF";
+
+      // If threshold increased (e.g., 0->1, 1->2, 2->3), trigger overlay
+      const prev = Number(el.dataset._threshold || 0);
+      if (curThreshold > prev) {
+        // find nearest .match parent
+        const matchEl = el.closest('.match');
+        showThresholdOverlay(matchEl, curThreshold);
       }
 
+      // store threshold for next tick
+      el.dataset._threshold = String(curThreshold);
+
       elapsed++;
+      el.setAttribute("data-start", elapsed);
     }
 
+    // initial render and start interval
     tick();
-    setInterval(tick, 1000);
+    const id = setInterval(tick, 1000);
+    timerIntervals.push(id);
   });
 }
 
+let globalScrollRequest = null;
 function startInfiniteScroll() {
   const board = document.getElementById("board");
-  if (scrollAnimation) cancelAnimationFrame(scrollAnimation);
+  if (!board) return;
 
-  const totalHeight = board.scrollHeight / 2; // original content height
-  let scrollPos = 0;
-  const speed = 0.25; // pixels per frame, adjust to scroll faster/slower
+  // cancel previous animation
+  if (globalScrollRequest) cancelAnimationFrame(globalScrollRequest);
 
+  // ensure opacity transition for board
+  if (!board.style.transition) board.style.transition = "opacity 0.8s ease";
+  board.style.opacity = 1;
+
+  // compute effective total (half because we duplicated)
   function step() {
-    scrollPos += speed;
-    if (scrollPos >= totalHeight) {
-      scrollPos = 0; // reset to top seamlessly
+    if (board.scrollHeight > board.clientHeight) {
+      scrollPos += scrollSpeed;
+      const effectiveTotal = Math.max(board.scrollHeight / 2, 1);
+      if (scrollPos >= effectiveTotal) scrollPos = 0;
+      board.scrollTop = scrollPos;
     }
-    board.scrollTop = scrollPos;
-    scrollAnimation = requestAnimationFrame(step);
+    globalScrollRequest = requestAnimationFrame(step);
   }
 
   step();
 }
 
-// Initial load and refresh
-loadMatches();
-setInterval(loadMatches, 15000); // refresh matches every 15s
+// bootstrap: load config, initial data, and polling
+(async () => {
+  await loadConfigAndSetup();
+
+  // initial matches for the currently-rendered page
+  await loadMatches(currentPage);
+
+  // poll matches on an interval (from config or default)
+  const refreshMs = (config && Number(config.refreshIntervalMs)) ? Number(config.refreshIntervalMs) : 15000;
+  setInterval(() => loadMatches(currentPage).catch(console.error), refreshMs);
+
+  // poll config for changes (so enabling/disabling rotation works without reload)
+  setInterval(async () => {
+    const oldRotation = JSON.stringify(config ? config.rotation : null);
+    await loadConfigAndSetup();
+    const newRotation = JSON.stringify(config ? config.rotation : null);
+    if (oldRotation !== newRotation) {
+      console.log("Rotation config changed, re-applied");
+    }
+  }, 5000);
+})();
 </script>
 
 </body>

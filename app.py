@@ -1,19 +1,25 @@
-import os
-import time
-import json
-import requests
+import os, json, time, requests
 from flask import Flask, jsonify, render_template
 
 API_URL = "https://api.start.gg/gql/alpha"
 API_KEY = os.getenv("START_GG_KEY") or "27e07da4ef74268bb5e236cc182c740a"
 
-# --- Load config file ---
-with open("config.json", "r", encoding="utf-8") as f:
-    CONFIG = json.load(f)
-
-EVENT_SLUGS = CONFIG.get("event_slugs", {})
-
+CONFIG_PATH = os.path.join(os.getcwd(), "config.json")
+print(CONFIG_PATH)
 app = Flask(__name__, template_folder="templates")
+
+# Simple loader: always re-read the file
+def load_config():
+    try:
+        with open(CONFIG_PATH, "r", encoding="utf-8") as f:
+            return json.load(f)
+    except FileNotFoundError:
+        return {
+            "event_slugs": {},
+            "scrollSpeed": 0.25,
+            "refreshIntervalMs": 15000,
+            "rotation": {"enabled": False}
+        }
 
 
 def graphql_query(query: str, variables: dict):
@@ -83,21 +89,24 @@ def get_ongoing_sets(event_slug: str):
             })
     return ongoing
 
+@app.route("/config")
+def get_config():
+    return jsonify(load_config())
+
 @app.route("/api/ongoing/<page>")
 def api_ongoing(page):
-    slug = EVENT_SLUGS.get(page)
+    cfg = load_config()
+    slug = cfg.get("event_slugs", {}).get(page)
     if not slug:
         return jsonify({"error": "invalid page"}), 404
     return jsonify(get_ongoing_sets(slug))
 
-
 @app.route("/index/<page>")
 def index(page):
-    slug = EVENT_SLUGS.get(page)
-    if not slug:
+    cfg = load_config()
+    if page not in cfg.get("event_slugs", {}):
         return "Invalid page", 404
     return render_template("board.html", page=page)
-
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=5000, debug=True)
