@@ -1,16 +1,17 @@
-# app.py
 import os
 import time
+import json
 import requests
 from flask import Flask, jsonify, render_template
 
 API_URL = "https://api.start.gg/gql/alpha"
 API_KEY = os.getenv("START_GG_KEY") or "27e07da4ef74268bb5e236cc182c740a"
 
-EVENT_SLUGS = {
-    "1": "tournament/tournament-template-3/event/tekken-singles",
-    "2": "tournament/tournament-template-3/event/strive-singles",
-}
+# --- Load config file ---
+with open("config.json", "r", encoding="utf-8") as f:
+    CONFIG = json.load(f)
+
+EVENT_SLUGS = CONFIG.get("event_slugs", {})
 
 app = Flask(__name__, template_folder="templates")
 
